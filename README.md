@@ -11,7 +11,7 @@
             uint32_t        timestamp;
     } header_t;
     ```
-    - #### legnth:
+    - #### length:
         Max length variable can be up to 65355. Authenticated via MAC.\
         Real maximum length is 1450, to prevent fragmentation.
         ```c
@@ -75,6 +75,38 @@
                 uint32_t app_window;    // Bytes available in receiver's application buffer
         } ack_payload_t;
         ```
+    - ### 3. RTT and RTO calculation (Jacobson/Karels Algorithm):
+        The Sender must calculate the Retransmission Timeout (RTO) dynamically based on network conditions. Hardcoded timeouts will cause either network congestion or stalled transfers.
+        - #### Base RTT:
+            When an ACK is received, calculate the raw Round-Trip Time:\
+            $RTT = Time_{Current} - echo\_ts - recv\_delay$
+        - #### Smoothed RTT (SRTT) and Variance (RTTVAR):
+            Maintain a running average to smooth out suddent network jitter.\
+            $\alpha = 0.125$ (Smoothing factor)\
+            $\beta = 0.25$ (Variance factor)\
+            Update the variables on every ACK:\
+            $SRTT = (1 - \alpha) * SRTT + \alpha * RTT$\
+            $RTTVAR = (1 - \beta) * RTTVAR + \beta * |SRTT - RTT|$
+            ##### Final RTO:
+            Calculate the timeout before resending a packet:\
+            $RTO = SRTT + 4 * RTTVAR$
+            >(Note: Clamp the RTO to a minimum of 10ms and maximum of 2000ms).
+    - ### 4. Congestion Control (BBR Engine):
+        If the transfer utilizes the BBR (Bottlenext Bandwidth and RTT) algorithm, the Sender must continuously calculate two primary metrics to pace the output.
+        - #### 4.1. Delivery Rate:
+            Calculated over a window of recent ACKs.\
+            $Delivery\_Rate = \frac{\Delta Data\_ACKed}{\Delta Time}$
+        - #### 4.2. RTprop (Round-Trip Propagatino Time):
+            The minimum observed RTT over a moving time window (typically 10 seconds). This represents the physical limits of the network without buffer bloat.
+        - #### 4.3. In-Flight Target (BDP - Bandwidth-Delay Product):
+            The Sender must cap the amount of unacknowledged data currently on the wire to the Bandwidth-Delay Product.\
+            $BDP = Delivery\_Rate \cdot RTprop$
+    - ### 5. Fast Retransmit Logic:
+        Do not wait for the RTO timer to expire if the SACK bitmask indicates a loss.
+        - ##### Rule:
+            If an ACK arrives and the `sack_bitmask` shows a 0 for speicific `Seq_ID`, and the `ack_seq_id` advances past it by at least 3 packets, assume the packet is lost.
+        - ##### Action:
+            Immediately re-qeueue the missing `Seq_ID` for transmission and reset its specific timout timer.
 
 
 - ## INTERACTION:
