@@ -75,6 +75,50 @@
                 uint32_t app_window;    // Bytes available in receiver's application buffer
         } ack_payload_t;
         ```
+        ```c
+        uint64_t build_sack_bitmask(uint64_t ack_seq_id, uint64_t *out_of_order_array, int array_count) {
+                uint64_t bitmask = 0;
+
+                for (int i = 0; i < array_count; i++) {
+                        uint64_t current_seq = out_of_order_array[i];
+
+                        // Only map packets within the 64-packet window
+                        if (current_seq > ack_seq_id && current_seq <= ack_seq_id + 64) {
+                                uint64_t bit_offset = current_seq - ack_seq_id - 1;
+                                bitmask |= (1ULL << bit_offset); // Set the bit to 1
+                        }
+                }
+
+                return bitmask;
+        }
+        ```
+        ```c
+        void process_ack(uint64_t ack_seq_id, uint64_t sack_bitmask) {
+                // 1. Everything <= ack_seq_id is safe to delete from memory.
+                clear_buffer_up_to(ack_seq_id);
+
+                // 2. Scan the next 64 packets in our "sent" queue
+                for (int i = 0; i < 64; i++) {
+                        uint64_t target_seq = ack_seq_id + 1 + i;
+
+                        // Skip if this packet hasn't even been sent yet
+                        if (!is_packet_in_flight(target_seq)) break;
+
+                        // 3. Check the specific bit for this sequence ID
+                        int is_received = (sack_bitmask & (1ULL << i)) != 0;
+
+                        if (is_received) {
+                                // Receiver got it out of order. Safe to delte.
+                                mark_packet_as_received(target_seq);
+                        } else {
+                                // Bit is 0. Is it lost or just delayed?
+                                // Fast Retransmit Rule: If we received a SACK for packets *after* this one,
+                                // it's almost certainly lost.
+                                trigger_fast_retransmit(target_seq);
+                        }
+                }
+        }
+        ```
     - ### 3. RTT and RTO calculation (Jacobson/Karels Algorithm):
         The Sender must calculate the Retransmission Timeout (RTO) dynamically based on network conditions. Hardcoded timeouts will cause either network congestion or stalled transfers.
         - #### Base RTT:
